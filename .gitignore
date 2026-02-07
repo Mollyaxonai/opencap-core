@@ -26,3 +26,8 @@ newsletter.py
 
 .DS_Store
 .vscode/
+# Models / data
+*.onnx
+OpenCapData_experiment/
+OpenCapData_experiment_modified/
+

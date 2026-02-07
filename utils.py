@@ -23,8 +23,8 @@ from utilsAuth import getToken
 from utilsAPI import getAPIURL
 
 API_URL = getAPIURL()
-API_TOKEN = getToken()
-
+# API_TOKEN = getToken()
+API_TOKEN = None
 #%% Rest of utils
 
 def getDataDirectory(isDocker=False):

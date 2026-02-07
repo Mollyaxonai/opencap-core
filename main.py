@@ -8,6 +8,7 @@
 """
 
 import os 
+from pathlib import Path
 import glob
 import numpy as np
 import yaml
@@ -16,8 +17,10 @@ import traceback
 import logging
 logging.basicConfig(level=logging.INFO)
 
+
 from utils import importMetadata, loadCameraParameters, getVideoExtension
 from utils import getDataDirectory, getOpenPoseDirectory, getMMposeDirectory
+from utilsAugmenter import augmentTRC
 from utilsChecker import saveCameraParameters
 from utilsChecker import calcExtrinsicsFromVideo
 from utilsChecker import isCheckerboardUpsideDown
@@ -28,17 +31,17 @@ from utilsChecker import popNeutralPoseImages
 from utilsChecker import rotateIntrinsics
 from utilsSync import synchronizeVideos
 from utilsDetector  import runPoseDetector
-from utilsAugmenter import augmentTRC
+# from utilsAugmenter import augmentTRC
 from utilsOpenSim import runScaleTool, getScaleTimeRange, runIKTool, generateVisualizerJson
 from defaults import DEFAULT_SYNC_VER
 
-def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
+def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_to_use=['all'],
          intrinsicsFinalFolder='Deployed', isDocker=False,
          extrinsicsTrial=False, alternateExtrinsics=None, 
          calibrationOptions=None,
          markerDataFolderNameSuffix=None, imageUpsampleFactor=4,
          poseDetector='OpenPose', resolutionPoseDetection='default', 
-         scaleModel=False, bbox_thr=0.8, augmenter_model='v0.3',
+         scaleModel=True, bbox_thr=0.8, augmenter_model='v0.3',
          genericFolderNames=False, offset=True, benchmark=False,
          dataDir=None, overwriteAugmenterModel=False,
          filter_frequency='default', overwriteFilterFrequency=False,
@@ -86,26 +89,30 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
         
     # %% Paths and metadata. This gets defined through web app.
     baseDir = os.path.dirname(os.path.abspath(__file__))
+    
+    # ---------- NO NEED -------------------------------------
     if dataDir is None:
         dataDir = getDataDirectory(isDocker)
     if 'dataDir' not in locals():
         sessionDir = os.path.join(baseDir, 'Data', sessionName)
     else:
         sessionDir = os.path.join(dataDir, 'Data', sessionName)
-    sessionMetadata = importMetadata(os.path.join(sessionDir,
-                                                  'sessionMetadata.yaml'))
+    # ---------- NO NEED -------------------------------------
+        
+    session_metadata_folder = os.path.join(baseDir,"OpenCapData_experiment","sessionMetadata.yaml")
+    sessionMetadata = importMetadata(session_metadata_folder)
     
-    # If augmenter model defined through web app.
-    # If overwriteAugmenterModel is True, the augmenter model is the one
-    # passed as an argument to main(). This is useful for local testing.
+    ### what does the sessionMetadata contain?
+    
+    ### Augmenter model takes the 3D markers already reconstructed from video and then predicts extra “virtual markers”
+    ### because OpenSim musculoskeletal models usually need more markers.
     if 'augmentermodel' in sessionMetadata and not overwriteAugmenterModel:
         augmenterModel = sessionMetadata['augmentermodel']
     else:
         augmenterModel = augmenter_model
         
-    # Lowpass filter frequency of 2D keypoints for gait and everything else.
-    # If overwriteFilterFrequency is True, the filter frequency is the one
-    # passed as an argument to main(). This is useful for local testing.
+    ### If you triangulate noisy 2D points into 3D, the noise gets amplified.
+    ### So, we cutoff frequency for smoothing 2D pose keypoints (not sure if this would affect the accuracy.)
     if 'filterfrequency' in sessionMetadata and not overwriteFilterFrequency:
         filterfrequency = sessionMetadata['filterfrequency']
     else:
@@ -115,30 +122,24 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
     else:
         filtFreqs = {'gait':filterfrequency, 'default':filterfrequency}
 
-    # If scaling setup defined through web app.
-    # If overwriteScalingSetup is True, the scaling setup is the one
-    # passed as an argument to main(). This is useful for local testing.
+    ### Specify how OpenCap performs the OpenSim scaling step.
     if 'scalingsetup' in sessionMetadata and not overwriteScalingSetup:
         scalingSetup = sessionMetadata['scalingsetup']
     else:
         scalingSetup = scaling_setup
 
-    # If camerastouse is in sessionMetadata, reprocess with specified cameras.
-    # This allows reprocessing trials with missing videos. If
-    # overwriteCamerasToUse is True, the camera selection is the one
-    # passed as an argument to main(). This is useful for local testing.
+    ### which cameras should be used.
     if 'camerastouse' in sessionMetadata and not overwriteCamerasToUse:
         camerasToUse = sessionMetadata['camerastouse']
     else:
         camerasToUse = cameras_to_use
 
-    # We'll use syncVer if provided to this function. If not, try to use one 
-    # from sessionMetadata, otherwise use the default one.
+    ### version of video time synchronization (use the default one).
     syncVer = syncVer or sessionMetadata.get('sync_ver', DEFAULT_SYNC_VER)
 
     # %% Paths to pose detector folder for local testing.
     if poseDetector == 'OpenPose':
-        poseDetectorDirectory = getOpenPoseDirectory(isDocker)
+        poseDetectorDirectory = os.path.join(baseDir,"openpose") # getOpenPoseDirectory(isDocker)
     elif poseDetector == 'mmpose':
         poseDetectorDirectory = getMMposeDirectory(isDocker)    
         
@@ -202,12 +203,13 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
         # Camera directories and models.
         cameraDirectories = {}
         cameraModels = {}
-        for pathCam in glob.glob(os.path.join(sessionDir, 'Videos', 'Cam*')):
+        video_file = os.path.join(baseDir,'OpenCapData_experiment')
+        for pathCam in glob.glob(os.path.join(video_file, 'Videos', 'Cam*')):
             if os.name == 'nt': # windows
                 camName = pathCam.split('\\')[-1]
             elif os.name == 'posix': # ubuntu
                 camName = pathCam.split('/')[-1]
-            cameraDirectories[camName] = os.path.join(sessionDir, 'Videos',
+            cameraDirectories[camName] = os.path.join(baseDir, 'Videos',
                                                       pathCam)
             cameraModels[camName] = sessionMetadata['iphoneModel'][camName]        
         
@@ -264,6 +266,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
                 # Modify intrinsics if camera view is rotated
                 CamParams = rotateIntrinsics(CamParams,extrinsicPath)
                 
+                ### so here, you use checkerboard to calculate the camera extrinsic parameters
                 # for 720p, imageUpsampleFactor=4 is best for small board
                 try:
                     CamParams = calcExtrinsicsFromVideo(
@@ -312,7 +315,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
         # Space-fixed are lowercase, Body-fixed are uppercase. 
         checkerBoardMount = sessionMetadata['checkerBoard']['placement']
         if checkerBoardMount == 'backWall' or checkerBoardMount == 'Perpendicular':
-            # Detect if checkerboard is upside down.
+            # Detect if checkerboard is upside down: you want the long side to stay horizontally and the short side to stay vertically 
             upsideDownChecker = isCheckerboardUpsideDown(CamParamDict)
             if upsideDownChecker:
                 rotationAngles = {'y':-90}
@@ -491,7 +494,9 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
             vertical_offset_settings = float(np.copy(vertical_offset)-0.01)
             vertical_offset = 0.01   
         
-    # %% OpenSim pipeline.
+    #-----------------------------------------------------
+    # runs OpenSim to turn your augmented marker TRC into a scaled musculoskeletal model + joint kinematics
+    # ----------------------------------------------------
     if runOpenSimPipeline:
         openSimPipelineDir = os.path.join(baseDir, "opensimPipeline")        
         
@@ -507,7 +512,7 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
         openSimDir = os.path.join(sessionDir, openSimFolderName)        
         outputScaledModelDir = os.path.join(openSimDir, 'Model')
 
-        # Check if shoulder model.
+        # which IK setup XML file it later uses (Setup_IK_should er.xml vs Setup_IK.xml)？
         if 'shoulder' in sessionMetadata['openSimModel']:
             suffix_model = '_shoulder'
         else:
@@ -618,3 +623,6 @@ def main(sessionName, trialName, trial_id, cameras_to_use=['all'],
             settings['verticalOffset'] = vertical_offset_settings 
         with open(pathSettings, 'w') as file:
             yaml.dump(settings, file)
+
+if __name__ == "__main__":
+    main()

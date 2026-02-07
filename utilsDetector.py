@@ -6,9 +6,9 @@ import numpy as np
 import json
 import sys
 import time
-
+import subprocess
 from decouple import config
-
+from pathlib import Path
 from utils import getOpenPoseMarkerNames, getMMposeMarkerNames, getVideoExtension
 from utilsChecker import getVideoRotation
 
@@ -157,7 +157,9 @@ def runOpenPoseVideo(cameraDirectory,fileName,pathOpenPose, trialName,
 # %%
 def runOpenPoseCMD(pathOpenPose, resolutionPoseDetection, cameraDirectory,
                    fileName, openposeJsonDir, pathOutputVideo, trialPrefix, 
-                   generateVideo, videoFullPath, pathOutputJsons):
+                   generateVideo, videoFullPath, pathOutputJsons, 
+                   openpose_root = Path(r"D:\AxonAI_app\openpose"),
+                   exe = Path(r"D:\AxonAI_app\openpose\build\x64\Release\OpenPoseDemo.exe")):
     
     rotation = getVideoRotation(videoFullPath)
     if rotation in [0,180]: 
@@ -226,19 +228,35 @@ def runOpenPoseCMD(pathOpenPose, resolutionPoseDetection, cameraDirectory,
             --render_pose 0{}".format(cameraDirectory, fileName,
                                         openposeJsonDir, cmd_hr)
     else:
-        os.chdir(pathOpenPose)
+
         pathVideoOut = os.path.join(pathOutputVideo,
                                     trialPrefix + 'withKeypoints.avi')
-        if not generateVideo:
-            command = ('bin\OpenPoseDemo.exe --video {} --write_json {} --render_threshold 0.5 --display 0 --render_pose 0{}'.format(
-                videoFullPath, pathOutputJsons, cmd_hr))
-        else:
-            command = ('bin\OpenPoseDemo.exe --video {} --write_json {} --render_threshold 0.5 --display 0{}--write_video {}'.format(
-                videoFullPath, pathOutputJsons, cmd_hr, pathVideoOut))
 
-    if command:
-        os.system(command)
-    
+        model = openpose_root / "models"
+
+        # Add likely DLL locations to PATH
+        dll_dirs = [
+            exe.parent,                          # ...\build\x64\Release
+            openpose_root / "bin",               # if you have a bin folder
+            openpose_root / "build" / "bin",     # sometimes used
+            openpose_root / "build" / "x64" / "Release",
+            openpose_root / "3rdparty" / "bin",  # if present
+        ]
+
+        # Add likely DLL to path
+        env = os.environ.copy()
+        existing = [str(p) for p in dll_dirs if p.exists()]
+        env["PATH"] = ";".join(existing) + ";" + env.get("PATH", "")
+
+        cmd = (
+            f'"{exe}" --video "{videoFullPath}" --write_json "{pathOutputJsons}" '
+            f'--model_folder "{model}" --display 0 --render_pose 0 '
+            f'--write_video "{pathVideoOut}"'
+        )
+
+        result = subprocess.run(cmd, shell=True, cwd=str(openpose_root), env=env,
+                                capture_output=True, text=True)
+
     return
 
 # %%

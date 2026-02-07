@@ -1,4 +1,5 @@
 import os
+os.environ["MPLBACKEND"] = "Agg"
 import utilsDataman
 import opensim
 import numpy as np

@@ -2,7 +2,7 @@ import os
 import numpy as np
 import utilsDataman
 import copy
-import tensorflow as tf
+# import tensorflow as tf
 from utils import TRC2numpy
 import json
 
@@ -14,7 +14,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
     featureHeight = True
     featureWeight = True
     
-    # Augmenter types
+    # Decide which model(s) to use: full-body vs lower/upper split
     if augmenter_model == 'v0.0':
         from utils import getOpenPoseMarkers_fullBody
         feature_markers_full, response_markers_full = getOpenPoseMarkers_fullBody()         
@@ -48,7 +48,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
     # print('Using augmenter model: {}'.format(augmenter_model))
     
     # %% Process data.
-    # Import TRC file
+    # Load the TRC file into a TRC object
     trc_file = utilsDataman.TRCFile(pathInputTRCFile)
     
     # Loop over augmenter types to handle separate augmenters for lower and
@@ -63,7 +63,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         augmenterModelDir = os.path.join(augmenterDir, augmenterModelName, 
                                          augmenterModelType)
         
-        # %% Pre-process inputs.
+        ### Pre-process the input data (make the model-ready tensor) for LSTM
         # Step 1: import .trc file with OpenPose marker trajectories.  
         trc_data = TRC2numpy(pathInputTRCFile, feature_markers)
         trc_data_data = trc_data[:,1:]
@@ -110,14 +110,29 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         json_file = open(os.path.join(augmenterModelDir, "model.json"), 'r')
         pretrainedModel_json = json_file.read()
         json_file.close()
-        model = tf.keras.models.model_from_json(pretrainedModel_json)
-        model.load_weights(os.path.join(augmenterModelDir, "weights.h5"))  
-        outputs = model.predict(inputs, verbose=2)
         
-        # %% Post-process outputs.
+        #-------------------------------------------------------------
+        # Run the model to predict “response markers”
+        # ------------------------------------------------------------
+        import onnxruntime as ort
+        onnx_model_path = os.path.join(augmenterModelDir, "model.onnx")
+        session = ort.InferenceSession(onnx_model_path)
+        # Get input name
+        input_name = session.get_inputs()[0].name
+        # Run inference
+        outputs = session.run(None, {input_name: inputs.astype(np.float32)})[0]
+        
+        # model = tf.keras.models.model_from_json(pretrainedModel_json)
+        # model.load_weights(os.path.join(augmenterModelDir, "weights.h5"))  
+        # outputs = model.predict(inputs, verbose=2)
+        
+        # -------------------------------------------------------------
+        # Post-process model outputs (undo the normalizations)
+        # -------------------------------------------------------------
         # Step 1: Reshape if necessary (eg, LSTM)
         if augmenterModelName == "LSTM":
             outputs = np.reshape(outputs, (outputs.shape[1], outputs.shape[2]))
+        
             
         # Step 2: Un-normalize with subject's height.
         unnorm_outputs = outputs * subject_height
@@ -141,8 +156,7 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
         outputs_all[idx_augm]['response_data'] = unnorm2_outputs
         n_response_markers_all += len(response_markers)
         
-    # %% Extract minimum y-position across response markers. This is used
-    # to align feet and floor when visualizing.
+    # %% Extract minimum y-position across response markers. This is used to align feet and floor when visualizing.
     responses_all_conc = np.zeros((unnorm2_outputs.shape[0],
                                    n_response_markers_all*3))
     idx_acc_res = 0
@@ -163,3 +177,4 @@ def augmentTRC(pathInputTRCFile, subject_mass, subject_height,
     trc_file.write(pathOutputTRCFile)
     
     return min_y_pos
+

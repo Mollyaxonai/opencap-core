@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from scipy.interpolate import pchip_interpolate
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import butter, gaussian, find_peaks, sosfiltfilt
+from scipy.signal import butter, find_peaks, sosfiltfilt
+from scipy.signal.windows import gaussian
 from scipy import signal
 import scipy.linalg
 
@@ -30,7 +31,59 @@ def synchronizeVideos(CameraDirectories, trialRelativePath, pathPoseDetector,
                       resolutionPoseDetection='default', 
                       visualizeKeypointAnimation=False,
                       syncVer=DEFAULT_SYNC_VER):
+
+    """
+    Synchronize 2D pose keypoints across multiple camera views.
     
+    This function loads pre-computed pose detection results from multiple cameras,
+    temporally aligns them using cross-correlation of motion signals, and optionally
+    corrects for lens distortion. The synchronized keypoints can then be used for
+    3D triangulation in the OpenCap pipeline.
+    
+    The synchronization process:
+        1. Loads 2D keypoints and confidence scores from pickle files for each camera
+        2. Excludes cameras with missing or invalid pose data
+        3. Detects the type of motion (gait, hand punch calibration, or general)
+        4. Computes temporal offsets between cameras using cross-correlation
+        5. Trims all sequences to a common synchronized time window
+        6. Optionally applies lens undistortion using camera calibration parameters
+    
+    Returns
+    -------
+    pointDir : dict
+        Synchronized 2D keypoints for each camera.
+        Keys are camera names, values are numpy arrays of shape (nMarkers, nFrames, 2)
+        where nMarkers is the number of body keypoints (e.g., 25 for OpenPose),
+        nFrames is the number of synchronized frames, and 2 represents (x, y) pixel
+        coordinates.
+        
+    confDir : dict
+        Confidence scores for each keypoint.
+        Keys are camera names, values are numpy arrays of shape (nMarkers, nFrames)
+        with values typically ranging from 0 to 1.
+        
+    markerNames : list
+        List of body keypoint names corresponding to the marker dimension.
+        Example: ['Nose', 'Neck', 'RShoulder', 'RElbow', 'RWrist', ...]
+        
+    frameRate : float
+        Video frame rate in frames per second (e.g., 30.0).
+        
+    nansInOutDir : dict
+        Dictionary indicating where NaN values were inserted during data cleaning.
+        Keys are camera names, values are numpy arrays of [startIdx, endIdx] or
+        [nan, nan] if no NaNs were inserted.
+        
+    startEndFrames : dict
+        Original frame indices corresponding to the synchronized output.
+        Keys are camera names, values are [startFrame, endFrame] lists.
+        Useful for trimming original videos to match synchronized keypoints.
+        
+    cameras2Use : list
+        Final list of camera names that were successfully processed.
+        May be shorter than input if some cameras had missing data.
+    """
+
     markerNames = getOpenPoseMarkerNames()
     
     # Create list of cameras.
@@ -172,6 +225,10 @@ def synchronizeVideoKeypoints(keypointList, confidenceList,
     
     # Turn Camera Dict into List
     c_CameraDirectories = list(c_CameraDirectoryDict.values())
+    # --------------------------------------------------------------------
+    # Bad Camera Removal
+    # --------------------------------------------------------------------
+    
     # Check if one camera has only 0s as confidence scores, which would mean
     # no one has been properly identified. We want to kick out this camera
     # from the synchronization and triangulation. We do that by popping out
@@ -195,6 +252,11 @@ def synchronizeVideoKeypoints(keypointList, confidenceList,
         
     markerNames = getOpenPoseMarkerNames()
     mkrDict = {mkr:iMkr for iMkr,mkr in enumerate(markerNames)}
+
+    # --------------------------------------------------------------------
+    # Occlusion handling
+    # --------------------------------------------------------------------
+    # Remove keypoints for body parts that are likely occluded (feet and arms) based on sudden confidence drops
     
     # First, remove occluded markers
     footMkrs = {'right':[mkrDict['RBigToe'], mkrDict['RSmallToe'], mkrDict['RHeel'],mkrDict['RAnkle']],
@@ -219,7 +281,11 @@ def synchronizeVideoKeypoints(keypointList, confidenceList,
     markers4VertVel = [mkrDict['RAnkle'], mkrDict['LAnkle']] # R&L Ankles and Heels did best. There are some issues though - like when foot marker velocity is aligned with camera ray
     markers4HandPunch = [mkrDict['RWrist'], mkrDict['LWrist'],mkrDict['RShoulder'],mkrDict['LShoulder']]
     markers4Ankles = [mkrDict['RAnkle'],mkrDict['LAnkle']]
-    
+
+    # --------------------------------------------------------------------
+    # Signal Extraction for Synchronization
+    # --------------------------------------------------------------------
+
     # find velocity signals for synchronization
     nCams = len(keypointList)
     vertVelList = []

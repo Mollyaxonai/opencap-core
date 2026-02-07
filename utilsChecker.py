@@ -28,7 +28,8 @@ from utilsAPI import getAPIURL
 
 from utilsAuth import getToken
 
-API_TOKEN = getToken()
+# API_TOKEN = getToken()
+API_TOKEN = None
 API_URL = getAPIURL()
 
 # %%
@@ -1317,9 +1318,45 @@ def triangulateMultiviewVideo(CameraParamDict,keypointDict,imageScaleFactor=1,
                               CameraDirectories = None, trialName = None,
                               startEndFrames=None, trialID='',
                               outputMediaFolder=None):
-    # cams2Use is a list of cameras that you want to use in triangulation. 
-    # if first entry of list is ['all'], will use all
-    # otherwise, ['Cam0','Cam2']
+
+    """
+    Triangulate 3D body pose from synchronized 2D keypoints across multiple camera views.
+    
+    This function takes synchronized 2D keypoints from multiple cameras and computes
+    3D positions using multi-view triangulation. It handles confidence weighting,
+    trims invalid frames, optionally interpolates missing data, and can generate
+    synchronized output videos for visualization.
+    
+    The triangulation process:
+        1. Selects cameras to use based on calibration availability
+        2. For each frame, triangulates 2D points from all views into 3D coordinates
+        3. Computes 3D confidence based on how many cameras observed each marker
+        4. Trims frames where insufficient cameras detected the person
+        5. Optionally writes synchronized video files for visualization
+        6. Optionally interpolates short gaps in 3D trajectories
+    
+    Returns
+    -------
+    points3D : numpy.ndarray
+        Triangulated 3D coordinates with shape (3, nMarkers, nFrames).
+        - Dimension 0: x, y, z coordinates (in calibration units, typically meters)
+        - Dimension 1: body markers (e.g., 25 for OpenPose)
+        - Dimension 2: time frames
+        Frames where triangulation failed contain zeros.
+        
+    confidence3D : numpy.ndarray
+        3D confidence scores with shape (1, nMarkers, nFrames).
+        Values indicate triangulation reliability:
+        - 0: Fewer than 2 cameras detected the marker (invalid)
+        - Higher values: More cameras with higher confidence detected the marker
+    """
+    # =========================================================================
+    # STEP 1: CAMERA SELECTION
+    # =========================================================================
+    # Determine which cameras to use for triangulation. Cameras must have valid
+    # calibration parameters (not None). If cams2Use is ['all'], use all 
+    # calibrated cameras. Otherwise, use only the specified cameras that have
+    # valid calibration.
     CameraParamList = [CameraParamDict[i] for i in CameraParamDict]
     if cams2Use[0] == 'all' and not None in CameraParamList:
         keypointDict_selectedCams = keypointDict
@@ -1343,13 +1380,31 @@ def triangulateMultiviewVideo(CameraParamDict,keypointDict,imageScaleFactor=1,
                 if confidenceDict:
                     confidenceDict_selectedCams[camName] = confidenceDict[camName]
     
+    # =========================================================================
+    # STEP 2: DATA PREPARATION
+    # =========================================================================
+    # Convert dictionaries to lists for easier iteration during triangulation.
+    # Also initialize output arrays for 3D points and confidence scores.
+    # 
+    # unpackKeypointList reorganizes data from (nMarkers, nFrames, 2) per camera
+    # to a list of frames, where each frame contains all camera views.
+    
     keypointList_selectedCams = [keypointDict_selectedCams[i] for i in keypointDict_selectedCams]
     confidenceList_selectedCams = [confidenceDict_selectedCams[i] for i in confidenceDict_selectedCams]
     CameraParamList_selectedCams = [CameraParamDict_selectedCams[i] for i in CameraParamDict_selectedCams]
     unpackedKeypoints = unpackKeypointList(keypointList_selectedCams)
     points3D = np.zeros((3,keypointList_selectedCams[0].shape[0],keypointList_selectedCams[0].shape[1]))
     confidence3D = np.zeros((1,keypointList_selectedCams[0].shape[0],keypointList_selectedCams[0].shape[1]))
-    
+
+    # =========================================================================
+    # STEP 3: FRAME-BY-FRAME TRIANGULATION
+    # =========================================================================
+    # For each synchronized frame, triangulate 2D points from all camera views
+    # into 3D coordinates. If confidence scores are provided, they are used to
+    # weight the contribution of each camera view (higher confidence = more weight).
+    #
+    # triangulateMultiview uses the Direct Linear Transform (DLT) algorithm or
+    # similar to find the 3D point that best explains all 2D observations.
     
     for iFrame,points2d in enumerate(unpackedKeypoints):
         # If confidence weighting
@@ -1560,7 +1615,31 @@ def calcReprojectionError(cameraList,points2D,points3D,weights=None,normalizeErr
 # %% Write TRC file for use with OpenSim.
 def writeTRCfrom3DKeypoints(keypoints3D, pathOutputFile, keypointNames, 
                             frameRate=60, rotationAngles={}):
+    """
+    Write 3D keypoints to a TRC (Track Row Column) file for OpenSim compatibility.
     
+    This function converts triangulated 3D keypoints from the OpenCap coordinate
+    system into the TRC file format used by OpenSim for musculoskeletal modeling
+    and biomechanical analysis. Face markers are excluded as they are unreliable
+    and not needed for body motion analysis.
+    
+    The conversion process:
+        1. Reshapes 3D keypoints from (3, nMarkers, nFrames) to (nFrames, nMarkers*3)
+        2. Converts units from millimeters to meters
+        3. Removes face markers from the data
+        4. Writes data to TRC file format
+        5. Applies rotation to align with OpenSim coordinate conventions
+    
+    Returns
+    -------
+    None
+        The function writes directly to the specified file path.
+    
+    Side Effects
+    ------------
+    - Creates a TRC file at pathOutputFile
+    - Overwrites existing file if present
+    """
     keypoints3D_res = np.empty((keypoints3D.shape[2],
                                 keypoints3D.shape[0]*keypoints3D.shape[1]))
     for iFrame in range(keypoints3D.shape[2]):
