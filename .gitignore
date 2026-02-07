@@ -31,3 +31,12 @@ newsletter.py
 OpenCapData_experiment/
 OpenCapData_experiment_modified/
 
+
+# Models / data
+*.onnx
+OpenCapData_experiment/
+OpenCapData_experiment_modified/
+__pycache__/
+*.pyc
+.vscode/
+
