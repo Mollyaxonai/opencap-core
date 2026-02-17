@@ -7,6 +7,7 @@ import glob
 import json
 import logging
 from utils import storage2numpy
+import subprocess
 
 # %% Scaling.
 def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
@@ -61,18 +62,18 @@ def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
         raise ValueError("Unknown model type: scaling")
     pathMarkerSet = os.path.join(dirGenericModel, markerSetFileName)
     
-    # Add the marker set to the generic model and save that updated model.
+    # Add the marker set to the generic model to ensure the model has the same marker names the TRC file contains
     opensim.Logger.setLevelString('error')
-    genericModel = opensim.Model(pathGenericModel)
-    markerSet = opensim.MarkerSet(pathMarkerSet)
+    genericModel = opensim.Model(pathGenericModel) # load the generic opensim model
+    markerSet = opensim.MarkerSet(pathMarkerSet) # attach the marker set
     genericModel.set_MarkerSet(markerSet)
     genericModel.printToXML(pathUpdGenericModel)    
 
-    # Time range.
+    # Convert time range into OpenSim's format
     timeRange_os = opensim.ArrayDouble(timeRange[0], 0)
     timeRange_os.insert(1, timeRange[-1])
                 
-    # Setup scale tool.
+    # Load and configure the OpenSim ScaleTool 
     scaleTool = opensim.ScaleTool(pathGenericSetupFile)
     scaleTool.setName(scaledModelName)
     scaleTool.setSubjectMass(subjectMass)
@@ -83,15 +84,15 @@ def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
     modelScaler.setMarkerFileName(pathTRCFile)
     modelScaler.setOutputModelFileName("")       
     modelScaler.setOutputScaleFileName("")
-    modelScaler.setTimeRange(timeRange_os) 
-    markerPlacer = scaleTool.getMarkerPlacer() 
+    modelScaler.setTimeRange(timeRange_os) # uses the marker distances inside the static time range to compute scale factors 
+    markerPlacer = scaleTool.getMarkerPlacer() # finds the joint angles that best align model markers to experimental markers
     markerPlacer.setMarkerFileName(pathTRCFile)                
     markerPlacer.setOutputModelFileName(pathOutputModel)
     markerPlacer.setOutputMotionFileName(pathOutputMotion) 
     markerPlacer.setOutputMarkerFileName("")
     markerPlacer.setTimeRange(timeRange_os)
     
-    # Disable tasks of dofs that are locked and markers that are not present.
+    # Disable tasks of dofs that are locked and markers that are not present, just in case the ScaleModel fail
     model = opensim.Model(pathUpdGenericModel)
     coordNames = []
     for coord in model.getCoordinateSet():
@@ -113,8 +114,8 @@ def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
             print('{} is not in model - ignoring IK task'.format(
                 task.getName()))
             
-    # Remove measurements from measurement set when markers don't exist.
-    # Disable entire measurement if no complete marker pairs exist.
+    # Scaling measurements are defined as the distance between marker pairs over the time window;
+    # if the measurement reference markers do not exist, then it removes those marker pairs. 
     measurementSet = modelScaler.getMeasurementSet()
     for meas in measurementSet:
         mkrPairSet = meas.getMarkerPairSet()
@@ -135,8 +136,17 @@ def runScaleTool(pathGenericSetupFile, pathGenericModel, subjectMass,
                       is not applied.'.format(meas.getName()))
     # Run scale tool.                      
     scaleTool.printToXML(pathOutputSetup)            
-    command = 'opensim-cmd -o error' + ' run-tool ' + pathOutputSetup
-    os.system(command)
+    opensim_exe = r"D:\conda_envs\opencap_clean\Library\bin\opensim-cmd.exe"
+
+    command = f'"{opensim_exe}" -o error run-tool "{pathOutputSetup}"'
+
+    # os.system(command)
+
+    result = subprocess.run(command, shell=True)
+    if result.returncode == 0:
+        print("OpenSim is run successfully for scaling model.")
+    else:
+        raise TypeError("OpenSim is not executed successfully!")
     
     # Sanity check
     scaled_model = opensim.Model(pathOutputModel)
@@ -226,8 +236,16 @@ def runIKTool(pathGenericSetupFile, pathScaledModel, pathTRCFile,
     IKTool.set_report_marker_locations(False)
     IKTool.set_output_motion_file(pathOutputMotion)
     IKTool.printToXML(pathOutputSetup)
-    command = 'opensim-cmd -o error' + ' run-tool ' + pathOutputSetup
-    os.system(command)
+
+    opensim_exe = r"D:\conda_envs\opencap_clean\Library\bin\opensim-cmd.exe"
+
+    command = f'"{opensim_exe}" -o error run-tool "{pathOutputSetup}"'
+    #os.system(command)
+    result = subprocess.run(command, shell=True)
+    if result.returncode == 0:
+        print("OpenSim is run successfully for scaling model.")
+    else:
+        raise TypeError("OpenSim is not executed successfully!")
     
     return pathOutputMotion, pathScaledModelWithoutPatella
     
@@ -241,7 +259,7 @@ def getScaleTimeRange(pathTRCFile, thresholdPosition=0.005, thresholdTime=0.3,
     
     c_trc_file = utilsDataman.TRCFile(pathTRCFile)
     c_trc_time = c_trc_file.time    
-    if withOpenPoseMarkers:
+    if withOpenPoseMarkers: # choose which marker to see whether they stay still over time
         # No big toe markers, such as to include both OpenPose and mmpose.
         markers = ["Neck", "RShoulder", "LShoulder", "RHip", "LHip", "RKnee", 
                    "LKnee", "RAnkle", "LAnkle", "RHeel", "LHeel", "RSmallToe", 
@@ -255,7 +273,7 @@ def getScaleTimeRange(pathTRCFile, thresholdPosition=0.005, thresholdTime=0.3,
                    "r_calc_study", "L_calc_study", "r_toe_study", 
                    "L_toe_study", "r_5meta_study", "L_5meta_study",
                    "RHJC_study", "LHJC_study"]
-        if withArms:
+        if withArms: # adds elbow and wrist markers
             markers.append("r_lelbow_study")
             markers.append("L_lelbow_study")
             markers.append("r_melbow_study")
@@ -280,13 +298,13 @@ def getScaleTimeRange(pathTRCFile, thresholdPosition=0.005, thresholdTime=0.3,
             markers = [marker.replace('r_mwrist','R_wrist_ulna') for marker in markers] # should just change the mocap marker set
             markers = [marker.replace('L_mwrist','L_wrist_ulna') for marker in markers] # should just change the mocap marker set
             
-
+    # Build a big matrix of marker coordinates over time
     trc_data = np.zeros((c_trc_time.shape[0], 3*len(markers)))
     for count, marker in enumerate(markers):
         trc_data[:, count*3:count*3+3] = c_trc_file.marker(marker)
     
     if removeRoot:
-        try:
+        try: # tries to subtract the midHip marker position from every marker, frame-by-frame.
             root_data = c_trc_file.marker('midHip')
             trc_data -= np.tile(root_data,len(markers))
         except:
@@ -294,7 +312,7 @@ def getScaleTimeRange(pathTRCFile, thresholdPosition=0.005, thresholdTime=0.3,
    
     if np.max(trc_data)>10: # in mm, turn to m
         trc_data/=1000
-        
+    # simply compute how many frames are there in 1 second based on the sampling frame of current video    
     # Sampling frequency.
     sf = np.round(1/np.mean(np.diff(c_trc_time)),4)
     # Minimum duration for time range in seconds.

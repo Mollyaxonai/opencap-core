@@ -35,7 +35,11 @@ from utilsDetector  import runPoseDetector
 from utilsOpenSim import runScaleTool, getScaleTimeRange, runIKTool, generateVisualizerJson
 from defaults import DEFAULT_SYNC_VER
 
-def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_to_use=['all'],
+def run_opencap(sessionName="Trial_Session", 
+         sessionName_scaled = 'Trial_Session_Scaling',
+         trialName = "33", 
+         trial_id="33", 
+         cameras_to_use=['all'],
          intrinsicsFinalFolder='Deployed', isDocker=False,
          extrinsicsTrial=False, alternateExtrinsics=None, 
          calibrationOptions=None,
@@ -97,6 +101,8 @@ def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_t
         sessionDir = os.path.join(baseDir, 'Data', sessionName)
     else:
         sessionDir = os.path.join(dataDir, 'Data', sessionName)
+    parent = Path(baseDir).parent
+    sessionDir_scaled = os.path.join(parent, 'Data', sessionName_scaled)
     # ---------- NO NEED -------------------------------------
         
     session_metadata_folder = os.path.join(baseDir,"OpenCapData_experiment","sessionMetadata.yaml")
@@ -509,10 +515,11 @@ def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_t
                 openSimFolderName = os.path.join(openSimFolderName,
                                                  markerDataFolderNameSuffix)
         
-        openSimDir = os.path.join(sessionDir, openSimFolderName)        
+        openSimDir = os.path.join(sessionDir_scaled, openSimFolderName)        
         outputScaledModelDir = os.path.join(openSimDir, 'Model')
 
         # which IK setup XML file it later uses (Setup_IK_should er.xml vs Setup_IK.xml)？
+        # .xml file loads what model to use and what data to use
         if 'shoulder' in sessionMetadata['openSimModel']:
             suffix_model = '_shoulder'
         else:
@@ -521,7 +528,7 @@ def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_t
         # Scaling.    
         if scaleModel:
             os.makedirs(outputScaledModelDir, exist_ok=True)
-            # Path setup file.
+            # selects which OpenSim ScaleTool settings file
             if scalingSetup == 'any_pose':
                 genericSetupFile4ScalingName = 'Setup_scaling_LaiUhlrich2022_any_pose.xml'
             else: # by default, use upright_standing_pose
@@ -538,7 +545,7 @@ def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_t
             # Get time range.
             try:
                 thresholdPosition = 0.003
-                maxThreshold = 0.015
+                maxThreshold = 0.6
                 increment = 0.001
                 success = False
                 while thresholdPosition <= maxThreshold and not success:
@@ -625,4 +632,70 @@ def main(sessionName="Trial_Session", trialName = "33", trial_id="33", cameras_t
             yaml.dump(settings, file)
 
 if __name__ == "__main__":
-    main()
+    """
+    Example execution of the OpenCap pipeline.
+
+    Parameters
+    ----------
+    sessionName : str
+        Name of the session folder under:
+            D:\\axon-ai\\Data\\
+        This directory is used to store outputs from the OpenSim pipeline.
+
+        • When scaleModel=True:
+            sessionName should point to the neutral-pose session where the
+            personalized (scaled) OpenSim model will be generated.
+
+        • When scaleModel=False:
+            sessionName should point to the trial session (e.g., walking)
+            where inverse kinematics (IK) results will be saved.
+
+    trialName : str
+        Name of the trial subfolder containing the input videos.
+        For the neutral trial this is typically "neutral"; for dynamic trials
+        it may be something like "33" (walking trial).
+
+    trial_id : str
+        Base filename of the video (without extension) inside the trial folder.
+        Example:
+            InputMedia/<trialName>/<trial_id>.mp4
+
+    scaleModel : bool
+        Controls which stage of the OpenSim pipeline is executed.
+
+        • True  → Neutral pose processing
+            - Runs OpenSim ScaleTool
+            - Generates the subject-specific scaled model
+            - Saves outputs to:
+                D:\\axon-ai\\Data\\<sessionName>\\OpenSimData\\...\\Model\\
+            - Used once per subject
+
+        • False → Dynamic trial processing (e.g., walking)
+            - Assumes a scaled model already exists
+            - Runs OpenSim Inverse Kinematics (IK)
+            - Saves kinematics (.mot) to:
+                D:\\axon-ai\\Data\\<sessionName>\\OpenSimData\\...\\Kinematics\\
+            - Used for each movement trial
+
+    Pipeline logic
+    --------------
+    1) First call (scaleModel=True):
+       Processes the neutral pose to create a personalized musculoskeletal model.
+
+    2) Second call (scaleModel=False):
+       Uses the scaled model to compute joint kinematics for the walking trial.
+    """
+
+    run_opencap(
+        sessionName="Trial_Session_Scaling",
+        trialName="neutral",
+        trial_id="neutral",
+        scaleModel=True
+    )
+
+    run_opencap(
+        sessionName="Trial_Session",
+        trialName="33",
+        trial_id="33",
+        scaleModel=False
+    )

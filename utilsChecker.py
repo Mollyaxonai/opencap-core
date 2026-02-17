@@ -14,7 +14,7 @@ import utilsDataman
 import requests
 import ffmpeg
 import logging
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from scipy.signal import sosfiltfilt, butter, find_peaks
 from scipy.interpolate import pchip_interpolate
 from scipy.spatial.transform import Rotation 
